@@ -521,6 +521,11 @@ impl<S: Read> DeflateRecv<S> {
     pub fn receive(&mut self) -> Result<(SimplifiedHeader, &[u8]), WsError> {
         self.read_state.receive(&mut self.stream)
     }
+
+    /// receive a mutable frame
+    pub fn receive_mut(&mut self) -> Result<(SimplifiedHeader, &mut [u8]), WsError> {
+        self.read_state.receive_mut(&mut self.stream)
+    }
 }
 
 /// send part of deflate message
