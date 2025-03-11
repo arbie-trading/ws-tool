@@ -283,6 +283,82 @@ impl DeflateReadState {
             }
         }
     }
+
+    /// receive a message, data as mut
+    pub fn receive_mut<S: Read>(
+        &mut self,
+        stream: &mut S,
+    ) -> Result<(SimplifiedHeader, &mut [u8]), WsError> {
+        loop {
+            let (mut header, mut data) = self.receive_one(stream)?;
+            if !self.config.merge_frame {
+                self.fragmented_data.clear();
+                self.fragmented_data.append(&mut data);
+                break Ok((header, &mut self.fragmented_data));
+            }
+            match header.code {
+                OpCode::Continue => {
+                    if !self.fragmented {
+                        return Err(WsError::ProtocolError {
+                            close_code: 1002,
+                            error: ProtocolError::MissInitialFragmentedFrame,
+                        });
+                    }
+                    let fin = header.fin;
+                    self.fragmented_data.extend_from_slice(&data);
+                    if fin {
+                        self.fragmented = false;
+                        header.code = self.fragmented_type;
+                        break Ok((header, &mut self.fragmented_data));
+                    } else {
+                        continue;
+                    }
+                }
+                OpCode::Text | OpCode::Binary => {
+                    if self.fragmented {
+                        return Err(WsError::ProtocolError {
+                            close_code: 1002,
+                            error: ProtocolError::NotContinueFrameAfterFragmented,
+                        });
+                    }
+                    if !header.fin {
+                        self.fragmented = true;
+                        self.fragmented_type = header.code;
+                        if header.code == OpCode::Text
+                            && self.config.validate_utf8.is_fast_fail()
+                            && simdutf8::basic::from_utf8(&data).is_err()
+                        {
+                            return Err(WsError::ProtocolError {
+                                close_code: 1007,
+                                error: ProtocolError::InvalidUtf8,
+                            });
+                        }
+                        self.fragmented_data.clear();
+                        self.fragmented_data.extend_from_slice(&data);
+                        continue;
+                    } else {
+                        if header.code == OpCode::Text
+                            && self.config.validate_utf8.should_check()
+                            && simdutf8::basic::from_utf8(&data).is_err()
+                        {
+                            return Err(WsError::ProtocolError {
+                                close_code: 1007,
+                                error: ProtocolError::InvalidUtf8,
+                            });
+                        }
+                        self.fragmented_data.clear();
+                        self.fragmented_data.extend_from_slice(&data);
+                        break Ok((header, &mut self.fragmented_data));
+                    }
+                }
+                OpCode::Close | OpCode::Ping | OpCode::Pong => {
+                    self.control_buf = data;
+                    break Ok((header, &mut self.control_buf));
+                }
+                _ => break Err(WsError::UnsupportedFrame(header.code)),
+            }
+        }
+    }
 }
 
 /// recv/send deflate message
