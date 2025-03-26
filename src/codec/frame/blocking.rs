@@ -42,6 +42,33 @@ impl FrameReadState {
         }
     }
 
+    /// **NOTE** masked frame has already been unmasked
+    pub fn receive_mut<S: Read>(
+        &mut self,
+        stream: &mut S,
+    ) -> Result<(SimplifiedHeader, &mut [u8]), WsError> {
+        if self.config.merge_frame {
+            loop {
+                let (mut header, range) = self.read_one_frame(stream)?;
+                if let Some(merged) = self
+                    .check_frame(header, range.clone())
+                    .and_then(|_| self.merge_frame(header, range.clone()))?
+                {
+                    if merged {
+                        header.code = self.fragmented_type;
+                        break Ok((header, &mut self.fragmented_data));
+                    } else {
+                        break Ok((header, &mut self.buf.buf[range]));
+                    }
+                }
+            }
+        } else {
+            let (header, range) = self.read_one_frame(stream)?;
+            self.check_frame(header, range.clone())?;
+            Ok((header, &mut self.buf.buf[range]))
+        }
+    }
+
     #[inline]
     fn read_one_frame<S: Read>(
         &mut self,
@@ -272,6 +299,11 @@ impl<S: Read> FrameRecv<S> {
     /// receive a frame
     pub fn receive(&mut self) -> Result<(SimplifiedHeader, &[u8]), WsError> {
         self.read_state.receive(&mut self.stream)
+    }
+
+    /// receive a mutable frame
+    pub fn receive_mut(&mut self) -> Result<(SimplifiedHeader, &mut [u8]), WsError> {
+        self.read_state.receive_mut(&mut self.stream)
     }
 }
 
